@@ -1,0 +1,42 @@
+name: Audit Course Notes
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install audit dependencies
+        run: pip install requests pycryptodome openai
+      - name: Load encrypted database
+        run: |
+          set -euo pipefail
+          git fetch --depth=1 origin '+refs/heads/data:refs/remotes/origin/data'
+          mkdir -p data/sharded/shards
+          git show origin/data:data/icourse-index.enc > data/sharded/icourse-index.enc
+          while IFS= read -r path; do
+            git show "origin/data:$path" > "data/sharded/shards/$(basename "$path")"
+          done < <(git ls-tree -r --name-only origin/data | grep '^data/shards/')
+      - name: Audit notes, model availability and current recordings
+        env:
+          STUID: ${{ secrets.STUID }}
+          UISPSW: ${{ secrets.UISPSW }}
+          StuId: ${{ secrets.STUID }}
+          UISPsw: ${{ secrets.UISPSW }}
+          COURSE_IDS: ${{ secrets.COURSE_IDS }}
+          SECRETS_CONTEXT: ${{ toJSON(secrets) }}
+        run: |
+          set -euo pipefail
+          eval "$(python scripts/provider_env.py)"
+          unset SECRETS_CONTEXT
+          python scripts/db_shard.py reassemble data/sharded data/icourse.db
+          python -u scripts/audit_notes.py
