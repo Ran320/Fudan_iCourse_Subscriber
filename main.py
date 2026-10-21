@@ -113,10 +113,12 @@ def _enumerate_lectures(client: ICourseClient, db: Database,
             lectures = deduped
 
             known_processed = db.get_processed_sub_ids(course_id)
+            exhausted = db.get_exhausted_sub_ids(course_id)
             new_lectures = [
                 lec for lec in lectures
                 if lec.get("has_playback")
                 and str(lec["sub_id"]) not in known_processed
+                and str(lec["sub_id"]) not in exhausted
             ]
             unprocessed = db.get_unprocessed_lectures(course_id)
             new_ids = {str(lec["sub_id"]) for lec in new_lectures}
@@ -148,7 +150,7 @@ def _drive_lectures(client: ICourseClient, db: Database,
                     scheduler: Scheduler, transcriber: Transcriber,
                     summarizer: Summarizer, reporter: Reporter,
                     all_lectures: list[tuple[str, str, dict]],
-                    email_items: list) -> None:
+                    email_items: list) -> list[str]:
     """Phase 2: run each lecture through LectureRunner.
 
     Pre-schedules the first lecture's prefetch (audio + images) before
@@ -156,7 +158,9 @@ def _drive_lectures(client: ICourseClient, db: Database,
     each LectureRunner.run via ``next_info``.
     """
     if not all_lectures:
-        return
+        return []
+
+    failures: list[str] = []
 
     runner = LectureRunner(
         client, db, scheduler, transcriber, summarizer, reporter,
@@ -186,6 +190,7 @@ def _drive_lectures(client: ICourseClient, db: Database,
                     "summary": summary,
                 })
         except Exception:
+            failures.append(sub_id)
             reporter.lecture_error(sub_id)
             traceback.print_exc()
         finally:
@@ -194,6 +199,8 @@ def _drive_lectures(client: ICourseClient, db: Database,
             # PPTPipeline.submit released the cache.
             scheduler.image_cache.discard(sub_id)
             scheduler.audio_downloader.release(sub_id)
+
+    return failures
 
 
 def _send_email(emailer: Emailer | None, db: Database, reporter: Reporter,
@@ -327,7 +334,7 @@ def run():
 
     try:
         all_lectures = _enumerate_lectures(client, db, reporter)
-        _drive_lectures(
+        failures = _drive_lectures(
             client, db, scheduler, transcriber, summarizer, reporter,
             all_lectures, email_items,
         )
@@ -337,6 +344,8 @@ def run():
 
     _send_email(emailer, db, reporter, email_items)
     reporter.run_footer()
+    if failures:
+        raise RuntimeError("Lecture processing failed for: " + ", ".join(failures))
 
 
 if __name__ == "__main__":

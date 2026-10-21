@@ -41,6 +41,10 @@ import time
 from typing import TYPE_CHECKING, Optional
 
 from src.ai import bucketer
+from src.ai.content_quality import (
+    InsufficientContentError, invalid_summary_reason,
+    ppt_has_content, transcript_has_content,
+)
 from src.pipeline.ppt_pipeline import PPTPipeline
 from src.ai.transcriber import IncompleteAudioError, NoAudioStreamError
 from src.runtime import config
@@ -145,11 +149,10 @@ class LectureRunner:
             self._ppt.prefetch_and_ocr(self._client, next_course, next_sub)
 
         # ── Phase F — bucketed-prompt LLM summary ──────────────────────
-        if not transcript.strip():
-            self._reporter.info("    Empty transcript, skipping summary.")
+        if not transcript_has_content(transcript) and not ppt_has_content(self._db.get_done_ppt_pages(sub_id)):
+            self._reporter.info("    No usable transcript or PPT content; source recovery required.")
             self._release_audio(sub_id)
-            self._db.mark_processed(sub_id)
-            self._db.clear_error(sub_id)
+            self._db.update_error(sub_id, "content_quality", "No usable speech or PPT text; cannot generate reliable notes")
             return None
 
         summary = self._summarize(
@@ -177,6 +180,7 @@ class LectureRunner:
         return bool(
             existing
             and existing.get("summary")
+            and not invalid_summary_reason(existing["summary"])
         )
 
     def prefetch_first(self, course_id: str, sub_id: str) -> None:
@@ -205,7 +209,8 @@ class LectureRunner:
         prefetching from spending a download slot (and a full lecture of
         bandwidth) on audio that would just be killed in Phase H."""
         existing = self._db.get_lecture(sub_id)
-        if existing and existing.get("transcript"):
+        if (existing and transcript_has_content(existing.get("transcript"))
+                and not invalid_summary_reason(existing.get("summary"))):
             return False
         if config.USE_OFFICIAL_TRANSCRIPT:
             try:
@@ -236,6 +241,8 @@ class LectureRunner:
         truncation)."""
         if not segments:
             return False
+        if not transcript_has_content(" ".join(segment.get("text", "") for segment in segments)):
+            return False
         max_gap_ms = max_gap_minutes * 60_000
         if segments[0]["start_ms"] > max_gap_ms:
             return False
@@ -256,7 +263,8 @@ class LectureRunner:
         complete-enough (no >20 min silence gaps) it replaces the ASR
         step entirely, saving ~5 min of CPU time per lecture.
         """
-        if existing and existing.get("transcript"):
+        if (existing and transcript_has_content(existing.get("transcript"))
+                and not invalid_summary_reason(existing.get("summary"))):
             self._reporter.info(
                 f"    Transcript exists "
                 f"({len(existing['transcript'])} chars), "
@@ -324,9 +332,9 @@ class LectureRunner:
         except NoAudioStreamError as e:
             self._reporter.info(f"    [SKIP] Video-only (no audio stream): {e}")
             self._db.update_error(sub_id, "transcribe", str(e))
-            self._db.mark_processed(sub_id)
             self._release_audio(sub_id)
-            return None, None
+            # A silent/video-only recording may still have useful slides.
+            return "", None
         except IncompleteAudioError as e:
             # Truncated download (ffmpeg may even exit 0 on a server-side
             # cut).  Don't persist the partial transcript — it would
@@ -353,9 +361,13 @@ class LectureRunner:
                    transcript_segments: list[dict] | None) -> Optional[str]:
         try:
             kept_pages = self._db.get_done_ppt_pages(sub_id)
+            ppt_only = not transcript_has_content(transcript)
             prompt_text, mode = bucketer.assemble(
-                transcript, transcript_segments, kept_pages,
+                "" if ppt_only else transcript, None if ppt_only else transcript_segments, kept_pages,
             )
+            if ppt_only:
+                prompt_text = ("本节音频没有可用转录。请仅根据以下有效 PPT 文字整理笔记，"
+                               "不要编造教师讲解、作业或考试安排。\n\n" + prompt_text)
             self._reporter.info(
                 f"    [Time] Generating summary at "
                 f"{time.strftime('%H:%M:%S')}"
@@ -364,6 +376,11 @@ class LectureRunner:
             summary, model_used = self._summarizer.summarize(
                 course_title, prompt_text,
             )
+            if invalid_summary_reason(summary):
+                raise InsufficientContentError("Model reports unusable source material; note was not accepted")
+            if ppt_only:
+                summary = ("### 材料范围说明\n\n本节未获得有效录音转录，以下笔记仅依据课程 PPT 文字整理，"
+                           "可能缺少教师口头讲解。\n\n" + summary)
             self._reporter.info(
                 f"    [OK] Summary by {model_used}: {len(summary)} chars"
             )
@@ -373,7 +390,7 @@ class LectureRunner:
             self._reporter.info(
                 f"    [FAIL] Summarization error: {type(e).__name__}: {e}"
             )
-            self._db.update_error(sub_id, "summarize", str(e))
+            self._db.update_error(sub_id, "content_quality" if isinstance(e, InsufficientContentError) else "summarize", str(e))
             raise
 
     def _release_audio(self, sub_id: str):

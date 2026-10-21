@@ -1,4 +1,5 @@
 import os
+import json
 
 STUDENT_ID = os.environ.get("StuId", "")
 PASSWORD = os.environ.get("UISPsw", "")
@@ -32,7 +33,8 @@ MODEL_PROVIDERS: list[dict] = [
         "default_base_url": "https://api-inference.modelscope.cn/v1/",
         "models": [
             "deepseek-ai/DeepSeek-V4-Pro-0813",
-            "deepseek-ai/DeepSeek-V4.1-Flash"
+            "deepseek-ai/DeepSeek-V4.1-Flash",
+            "Qwen/Qwen3.5-397B-A17B",
             
         ],
     },
@@ -80,6 +82,12 @@ def resolve_model_providers() -> list[dict]:
     Returns:
         list of {name, api_key, base_url, models}.
     """
+    try:
+        model_overrides = json.loads(os.environ.get("ICS_MODEL_OVERRIDES", "{}"))
+    except (ValueError, TypeError):
+        model_overrides = {}
+    if not isinstance(model_overrides, dict):
+        model_overrides = {}
     resolved: list[dict] = []
     by_name: dict[str, dict] = {}
     for p in MODEL_PROVIDERS:
@@ -92,9 +100,12 @@ def resolve_model_providers() -> list[dict]:
         )
         if not base_url:
             continue
+        models = model_overrides.get(p["name"], p["models"])
+        if not isinstance(models, list) or not models:
+            continue
         if p["name"] in by_name:
             existing = by_name[p["name"]]
-            for m in p["models"]:
+            for m in models:
                 if m not in existing["models"]:
                     existing["models"].append(m)
             continue
@@ -102,7 +113,7 @@ def resolve_model_providers() -> list[dict]:
             "name": p["name"],
             "api_key": api_key,
             "base_url": base_url,
-            "models": list(p["models"]),
+            "models": list(models),
         }
         resolved.append(entry)
         by_name[p["name"]] = entry

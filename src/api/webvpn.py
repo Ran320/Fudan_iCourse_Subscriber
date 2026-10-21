@@ -183,14 +183,15 @@ class WebVPNSession:
 
         print("[*] Starting iCourse CAS authentication through WebVPN...")
 
-        # Pre-flight: probe the WebVPN portal.  A cold session redirects to
-        # /login instantly (status 302); a hot session returns 200.  Fail
-        # fast on cold — login_with_retry() in main.py will re-login.
+        # The portal may redirect even when proxied applications can be
+        # authenticated. Treat this probe as diagnostic; the authoritative
+        # check is the authenticated iCourse API after the normal CAS flow.
         warmup = self.session.get(
             config.WEBVPN_BASE + "/", allow_redirects=False, timeout=5,
         )
         if warmup.status_code != 200:
-            raise RuntimeError("WebVPN session cold — re-login needed")
+            redirect_path = urlparse(warmup.headers.get("Location", "")).path
+            print(f"    Portal probe: HTTP {warmup.status_code}, path={redirect_path}; trying normal CAS authentication.")
 
         idp_vpn_base = get_vpn_url(config.IDP_BASE)
 
@@ -364,8 +365,7 @@ class WebVPNSession:
             except Exception:
                 pass
 
-        print("    Could not verify iCourse auth via API, proceeding...")
-        return True
+        raise RuntimeError(f"iCourse authentication could not be verified (HTTP {resp.status_code})")
 
     def get(self, url: str, **kwargs) -> requests.Response:
         """GET request through WebVPN. Converts URL automatically."""

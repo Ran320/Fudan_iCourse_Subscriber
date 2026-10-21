@@ -310,14 +310,16 @@
                   :class="{
                     'badge-ready': lec.state === 'ready',
                     'badge-processing': lec.state === 'processing',
-                    'badge-waiting': lec.state === 'waiting' || lec.state === 'novideo',
-                    'badge-skipped': lec.state === 'skipped',
+                    'badge-waiting': lec.state === 'waiting' || lec.state === 'novideo' || lec.state === 'repairing',
+                    'badge-skipped': lec.state === 'skipped' || lec.state === 'unavailable',
                     'badge-failed': lec.state === 'failed'
                   }"
                   x-text="lec.state === 'ready' ? 'Ready' :
                           lec.state === 'processing' ? 'Summarizing…' :
                           lec.state === 'waiting' ? 'Waiting' :
                           lec.state === 'novideo' ? 'No Video' :
+                          lec.state === 'unavailable' ? '材料不足' :
+                          lec.state === 'repairing' ? '待重处理' :
                           lec.state === 'skipped' ? 'No Content' :
                           'Failed: ' + (lec.error_stage || 'unknown')"></span>
           </div>
@@ -326,7 +328,7 @@
              class="text-xs text-gray-400 mt-1.5 line-clamp-2"
              x-text="snippet(lec.summary, 100)"></p>
           <!-- Error detail -->
-          <p x-show="lec.state === 'failed' && lec.error_msg"
+          <p x-show="(lec.state === 'failed' || lec.state === 'unavailable') && lec.error_msg"
              class="text-xs text-red-400 mt-1 truncate" x-text="lec.error_msg"></p>
         </button>
       </template>

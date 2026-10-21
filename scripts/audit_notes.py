@@ -103,7 +103,7 @@ def audit() -> dict:
             break
         except Exception as error:
             if attempt == 4:
-                report['errors'].append('School login failed: ' + type(error).__name__)
+                report['errors'].append('School login failed: ' + type(error).__name__ + ': ' + str(error)[:500])
                 vpn = None
             else:
                 time.sleep(5)

@@ -214,6 +214,15 @@ class Database:
             rows = self.conn.execute(query, params).fetchall()
         return [dict(row) for row in rows]
 
+    def get_exhausted_sub_ids(self, course_id: str, max_errors: int = 3) -> set[str]:
+        """Do not re-add exhausted retries as if they were new recordings."""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT sub_id FROM lectures WHERE course_id = ? AND processed_at IS NULL "
+                "AND COALESCE(error_count, 0) >= ?", (course_id, max_errors),
+            ).fetchall()
+        return {str(row['sub_id']) for row in rows}
+
     def update_transcript(self, sub_id: str, transcript: str):
         with self._lock, self.conn:
             self.conn.execute(
