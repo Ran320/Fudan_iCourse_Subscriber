@@ -688,12 +688,14 @@ document.addEventListener("alpine:init", () => {
 
     async testAndSave() {
       this.setupTesting = true; this.setupError = "";
+      var connectionStage = "读取 GitHub 数据";
       try {
         var manifest = await ICS.github.fetchShardManifest(
           this.repoOwner, this.repoName, this.dataBranch, this.setup.token,
         );
         if (manifest.format === "sharded") {
           // Probe the index decryption to validate creds before we save.
+          connectionStage = "验证数据库解密凭据";
           var pw = await ICS.crypto.buildPasswordV2(this.setup);
           var indexEnc = await ICS.github.fetchBlobBytes(
             this.repoOwner, this.repoName, manifest.index.sha, this.setup.token,
@@ -711,15 +713,24 @@ document.addEventListener("alpine:init", () => {
           var legacyValidator = manifest.legacy.compressed
             ? ICS.crypto.isGzip
             : ICS.crypto.isSqlite;
+          connectionStage = "验证旧版数据库解密凭据";
           await ICS.crypto.decryptWithFallback(
             encBytes, this.setup, legacyValidator,
           );
         }
+        connectionStage = "保存浏览器设置";
         _saveCreds({ ...this.setup });
         _saveSettings({ owner: this.repoOwner, repo: this.repoName, branch: this.dataBranch });
         this.commitSha = manifest.commitSha;
         await this._loadDB({ ...this.setup });
-      } catch (e) { this.setupError = e.message; }
+      } catch (e) {
+        if (e && e.name === "OperationError") {
+          this.setupError = connectionStage + "失败：请确认学号和 UIS 密码与仓库 Secrets 中的 STUID、UISPSW 完全一致。";
+        } else {
+          var detail = (e && (e.message || e.name)) || "未知错误";
+          this.setupError = connectionStage + "失败：" + detail;
+        }
+      }
       finally { this.setupTesting = false; }
     },
 
@@ -1019,3 +1030,4 @@ document.addEventListener("alpine:init", () => {
     relTime(s) { return _relativeTime(s); },
   }));
 });
+
