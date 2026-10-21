@@ -30,13 +30,12 @@ jobs:
         env:
           STUID: ${{ secrets.STUID }}
           UISPSW: ${{ secrets.UISPSW }}
-          StuId: ${{ secrets.STUID }}
-          UISPsw: ${{ secrets.UISPSW }}
           COURSE_IDS: ${{ secrets.COURSE_IDS }}
           SECRETS_CONTEXT: ${{ toJSON(secrets) }}
         run: |
           set -euo pipefail
           eval "$(python scripts/provider_env.py)"
           unset SECRETS_CONTEXT
+          export StuId="$STUID" UISPsw="$UISPSW"
           python scripts/db_shard.py reassemble data/sharded data/icourse.db
           python -u scripts/audit_notes.py
