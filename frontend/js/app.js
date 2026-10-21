@@ -247,7 +247,7 @@ document.addEventListener("alpine:init", () => {
   Alpine.data("app", () => ({
     view: "loading", error: null, loadingMsg: "",
     toast: null, toastType: "success",
-    courses: [], lectures: [],
+    courses: [], lectures: [], showArchivedCourses: false,
     currentCourse: null, currentLecture: null,
     currentPptPages: [],
     detailView: "summary",
@@ -330,7 +330,7 @@ document.addEventListener("alpine:init", () => {
           );
         }
 
-        this.courses = this._sortCoursesByStar(ICS.db.getCourses());
+        this.courses = this._visibleCourses();
         this.view = "courses";
       } catch (e) {
         this.error = e.message;
@@ -347,7 +347,7 @@ document.addEventListener("alpine:init", () => {
       params = params || {};
       this.error = null;
       if (view === "courses") {
-        this.courses = this._sortCoursesByStar(ICS.db.getCourses());
+        this.courses = this._visibleCourses();
       }
       else if (view === "lectures" && params.courseId) {
         this.currentCourse = this.courses.find(x => x.course_id === params.courseId) || { course_id: params.courseId, title: "...", teacher: "" };
@@ -376,6 +376,34 @@ document.addEventListener("alpine:init", () => {
       }
       this.view = view;
       if (view !== "lectures") this.exportDialogOpen = false;
+    },
+    _currentCourseIds() {
+      // The sharder persists the subscription under subscribed_course_ids.
+      // course_ids is the legacy metadata key.
+      for (var key of ["subscribed_course_ids", "course_ids"]) {
+        var raw = null;
+        try { raw = ICS.db.getMeta(key); } catch (e) {}
+        if (typeof raw === "string") {
+          return raw.split(",").map(s => s.trim()).filter(Boolean);
+        }
+      }
+      try {
+        var cached = JSON.parse(localStorage.getItem(_LS + "lastSubscribed") || "null");
+        if (Array.isArray(cached)) return cached.map(String);
+      } catch (e) {}
+      return ["40144", "39884", "38939", "39366", "40755"];
+    },
+    _visibleCourses() {
+      var list = ICS.db.getCourses();
+      if (!this.showArchivedCourses) {
+        var current = new Set(this._currentCourseIds());
+        list = list.filter(course => current.has(String(course.course_id)));
+      }
+      return this._sortCoursesByStar(list);
+    },
+    toggleArchivedCourses() {
+      this.showArchivedCourses = !this.showArchivedCourses;
+      this.courses = this._visibleCourses();
     },
     _sortCoursesByStar(list) {
       // Stable two-key sort: starred first (descending = pinned), then
@@ -798,7 +826,7 @@ document.addEventListener("alpine:init", () => {
         if (Array.isArray(cached)) this.subscribedIds = cached.map(String);
       } catch {}
       if (!this.subscribedIds.length) {
-        try { var metaRaw = ICS.db.getMeta("course_ids"); } catch (e) { metaRaw = null; }
+        var metaRaw = this._currentCourseIds().join(",");
         if (metaRaw) {
           this.subscribedIds = metaRaw.split(",")
             .map(function (s) { return s.trim(); })

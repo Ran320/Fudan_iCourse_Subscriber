@@ -80,6 +80,8 @@ def audit() -> dict:
     connection.row_factory = sqlite3.Row
     report = {'models': model_probe(), 'courses': [], 'invalid_notes': [], 'errors': []}
     rows = [dict(row) for row in connection.execute('SELECT * FROM lectures')]
+    current_ids = set(config.COURSE_IDS)
+    rows = [row for row in rows if str(row['course_id']) in current_ids]
     for row in rows:
         reason = invalid_summary_reason(row.get('summary'))
         if reason:
@@ -89,7 +91,7 @@ def audit() -> dict:
                                              'summary_chars': len(row['summary']),
                                              'transcript_chars': len(row.get('transcript') or '')})
     courses = {str(row['course_id']): dict(row) for row in
-               connection.execute('SELECT * FROM courses')}
+               connection.execute('SELECT * FROM courses') if str(row['course_id']) in current_ids}
     for course_id in config.COURSE_IDS:
         courses.setdefault(course_id, {'course_id': course_id, 'title': '', 'teacher': ''})
     vpn = None

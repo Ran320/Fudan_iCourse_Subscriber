@@ -414,7 +414,9 @@ function _getCoursesByIds(ids) {
   for (var m = 0; m < ids.length; m++) {
     var idStr = String(ids[m]);
     if (!foundIds[idStr]) {
-      out.push({ course_id: idStr, term: "", title: "", teacher: "", dept: "" });
+      var stored = _queryAll("SELECT title, teacher FROM courses WHERE course_id = ?", [idStr]);
+      out.push({ course_id: idStr, term: "", title: stored.length ? stored[0].title : "",
+        teacher: stored.length ? stored[0].teacher : "", dept: "" });
       foundIds[idStr] = true;
     }
   }
