@@ -176,18 +176,23 @@ jobs:
           SMTP_EMAIL: ${{ secrets.SMTP_EMAIL }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
-          # All secrets, JSON-encoded. provider_env.py exports only the
-          # vars named by config.MODEL_PROVIDERS (api_key_env /
-          # base_url_env), so user-defined providers with custom env-var
-          # names work without editing this workflow.
-          SECRETS_CONTEXT: ${{ toJSON(secrets) }}
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+          DASHSCOPE_BASE_URL: ${{ secrets.DASHSCOPE_BASE_URL }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          DEEPSEEK_BASE_URL: ${{ secrets.DEEPSEEK_BASE_URL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_BASE_URL: ${{ secrets.GEMINI_BASE_URL }}
         run: |
-          eval "$(python scripts/provider_env.py)"
-          unset SECRETS_CONTEXT
           python -u main.py
 
+      - name: Report course note status
+        if: always() && steps.db-before.outcome == 'success'
+        env:
+          COURSE_IDS: ${{ secrets.COURSE_IDS }}
+        run: python scripts/prepare_notes_repair.py --report-only
+
       - name: Deploy database to data branch
-        if: always()
+        if: always() && steps.db-before.outcome == 'success'
         env:
           STUID: ${{ secrets.STUID }}
           UISPSW: ${{ secrets.UISPSW }}
@@ -199,8 +204,8 @@ jobs:
           SUBSCRIBED_COURSE_IDS: ${{ secrets.COURSE_IDS }}
           DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           if [ ! -f data/icourse.db ]; then
             echo "No database file, skipping."
             exit 0
@@ -214,7 +219,7 @@ jobs:
 
           # Pull the latest remote shards (a concurrent run may have written
           # new data) and merge our local changes in before re-sharding.
-          git fetch origin data --depth=1 2>/dev/null || echo "No data branch yet."
+          git fetch origin data --depth=1
           DEPLOY_DB=data/icourse.db
           if git rev-parse origin/data >/dev/null 2>&1 && \
              git cat-file -e origin/data:data/icourse-index.enc 2>/dev/null; then
@@ -232,22 +237,21 @@ jobs:
             DEPLOY_DB=data/remote.db
           fi
 
-          # Re-shard the merged DB and stage to a clean tree for force-push.
+          # Re-shard the merged database before committing on the data branch.
           rm -rf data/sharded_out
           mkdir -p data/sharded_out
           python scripts/db_shard.py shard "$DEPLOY_DB" data/sharded_out
 
-          rm -rf /tmp/db_deploy
-          mkdir -p /tmp/db_deploy/data/shards
-          cp data/sharded_out/icourse-index.enc /tmp/db_deploy/data/
-          cp data/sharded_out/shards/*.db.gz.enc /tmp/db_deploy/data/shards/
-          cd /tmp/db_deploy
-
-          git init -q
-          git checkout -q -b data
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/
-          git commit -q -m "chore: update encrypted database (sharded v2)"
-          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git"
-          git push --force origin data
+          current_sha=$(git rev-parse origin/data)
+          deploy_dir=$(mktemp -d "$RUNNER_TEMP/icourse-data.XXXXXX")
+          git worktree add --detach "$deploy_dir" "$current_sha"
+          rm -rf -- "$deploy_dir/data/shards"
+          mkdir -p "$deploy_dir/data/shards"
+          cp data/sharded_out/icourse-index.enc "$deploy_dir/data/"
+          cp data/sharded_out/shards/*.db.gz.enc "$deploy_dir/data/shards/"
+          git -C "$deploy_dir" config user.name "github-actions[bot]"
+          git -C "$deploy_dir" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$deploy_dir" add -A data/
+          git -C "$deploy_dir" commit -m "chore: update encrypted course notes"
+          # Preserve history and reject an unexpected concurrent update.
+          git -C "$deploy_dir" push origin HEAD:data

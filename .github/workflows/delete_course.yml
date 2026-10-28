@@ -20,10 +20,6 @@ concurrency:
   group: icourse-database
   cancel-in-progress: false
 
-concurrency:
-  group: db-reset
-  cancel-in-progress: false
-
 jobs:
   delete:
     runs-on: ubuntu-latest
